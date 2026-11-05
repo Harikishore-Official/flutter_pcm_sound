@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.io.StringWriter;
 import java.io.PrintWriter;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicLong;
 
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.plugin.common.BinaryMessenger;
@@ -51,6 +52,8 @@ public class FlutterPcmSoundPlugin implements
     private long mTotalFeeds = 0;
     private long mLastLowBufferFeed = 0;
     private long mLastZeroFeed = 0;
+    private final Object mPlaybackLock = new Object();
+    private final AtomicLong mFlushGeneration = new AtomicLong(0);
 
     // Thread-safe queue for storing audio samples
     private final LinkedBlockingQueue<ByteBuffer> mSamples = new LinkedBlockingQueue<>();
@@ -194,6 +197,25 @@ public class FlutterPcmSoundPlugin implements
                     result.success(true);
                     break;
                 }
+                case "flush": {
+                    // Preserve AudioTrack and its voice-communication route.
+                    // Clearing only the Java queue is insufficient because a
+                    // chunk may already have reached AudioTrack; pause/flush
+                    // removes that pending native audio as well.
+                    synchronized (mPlaybackLock) {
+                        mFlushGeneration.incrementAndGet();
+                        synchronized (mSamples) {
+                            mSamples.clear();
+                        }
+                        if (mAudioTrack != null) {
+                            mAudioTrack.pause();
+                            mAudioTrack.flush();
+                            mAudioTrack.play();
+                        }
+                    }
+                    result.success(true);
+                    break;
+                }
                 case "release": {
                     cleanup();
                     result.success(true);
@@ -260,8 +282,14 @@ public class FlutterPcmSoundPlugin implements
                 continue;
             }
 
-            // write
-            mAudioTrack.write(data, data.remaining(), AudioTrack.WRITE_BLOCKING);
+            // A flush may happen after take() but before write(). Generation
+            // checks prevent a stale pre-interrupt chunk reaching AudioTrack.
+            long generation = mFlushGeneration.get();
+            synchronized (mPlaybackLock) {
+                if (!mShouldCleanup && generation == mFlushGeneration.get() && mAudioTrack != null) {
+                    mAudioTrack.write(data, data.remaining(), AudioTrack.WRITE_BLOCKING);
+                }
+            }
 
             long remainingFrames;
             long totalFeeds;

@@ -136,6 +136,16 @@ class FlutterPcmSound {
     return await _invokeMethod('release');
   }
 
+  /// Discard queued audio while keeping the platform audio session alive.
+  ///
+  /// This is intended for conversational barge-in: unlike [release], it does
+  /// not destroy and recreate the playback route, which may also be in use by
+  /// a microphone configured for voice communication.
+  static Future<void> flush() async {
+    _needsStart = true;
+    return await _invokeMethod('flush');
+  }
+
   static Future<T?> _invokeMethod<T>(String method, [dynamic arguments]) async {
     if (_logLevel.index >= LogLevel.standard.index) {
       String args = '';

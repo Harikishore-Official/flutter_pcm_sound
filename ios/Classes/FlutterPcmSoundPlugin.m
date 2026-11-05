@@ -256,6 +256,16 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
 
             result(@YES);
         }
+        else if([@"flush" isEqualToString:call.method])
+        {
+            // Keep the AudioUnit and AVAudioSession alive for a voice call,
+            // while discarding agent audio that has not yet reached the speaker.
+            @synchronized (self.mSamples) {
+                [self.mSamples setLength:0];
+            }
+            [self stopAudioUnit];
+            result(@YES);
+        }
         else if([@"release" isEqualToString:call.method])
         {
             [self cleanup];
