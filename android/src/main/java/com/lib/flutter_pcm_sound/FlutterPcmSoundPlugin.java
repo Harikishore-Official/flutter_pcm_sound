@@ -36,7 +36,11 @@ public class FlutterPcmSoundPlugin implements
     MethodChannel.MethodCallHandler
 {
     private static final String CHANNEL_NAME = "flutter_pcm_sound/methods";
-    private static final int MAX_FRAMES_PER_BUFFER = 200;
+    // Bytes, not frames. 200 bytes is only 6.25 ms at 16 kHz PCM mono and
+    // forces hundreds of blocking AudioTrack writes per second. Larger writes
+    // reduce scheduler pressure while remaining comfortably below the native
+    // streaming buffer.
+    private static final int MAX_BYTES_PER_BUFFER = 2048;
 
     private MethodChannel mMethodChannel;
     private Handler mainThreadHandler = new Handler(Looper.getMainLooper());
@@ -118,6 +122,15 @@ public class FlutterPcmSoundPlugin implements
                         return;
                     }
 
+                    // getMinBufferSize is merely the hardware minimum. Voice
+                    // streaming needs some scheduling headroom above it, or a
+                    // busy device can under-run between otherwise valid PCM
+                    // WebSocket packets. Keep at least a 250 ms native buffer.
+                    int playbackBufferSize = Math.max(
+                        mMinBufferSize,
+                        (sampleRate * mNumChannels * 2) / 4
+                    );
+
                     if (Build.VERSION.SDK_INT >= 23) { // Android 6 (Marshmallow) and above
                         mAudioTrack = new AudioTrack.Builder()
                             .setAudioAttributes(new AudioAttributes.Builder()
@@ -129,7 +142,7 @@ public class FlutterPcmSoundPlugin implements
                                     .setSampleRate(sampleRate)
                                     .setChannelMask(channelConfig)
                                     .build())
-                            .setBufferSizeInBytes(mMinBufferSize)
+                            .setBufferSizeInBytes(playbackBufferSize)
                             .setTransferMode(AudioTrack.MODE_STREAM)
                             .build();
                     } else {
@@ -138,7 +151,7 @@ public class FlutterPcmSoundPlugin implements
                             sampleRate,
                             channelConfig,
                             AudioFormat.ENCODING_PCM_16BIT,
-                            mMinBufferSize,
+                            playbackBufferSize,
                             AudioTrack.MODE_STREAM);
                     }
 
@@ -174,7 +187,7 @@ public class FlutterPcmSoundPlugin implements
                     byte[] buffer = call.argument("buffer");
 
                     // Split for better performance
-                    List<ByteBuffer> chunks = split(buffer, MAX_FRAMES_PER_BUFFER);
+                    List<ByteBuffer> chunks = split(buffer, MAX_BYTES_PER_BUFFER);
 
                     // Push samples
                     synchronized (mSamples) {
